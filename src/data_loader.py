@@ -1,31 +1,81 @@
+import json
 import os
-import cv2
-from src.fake_data import generate_fake_video
 
 
-# 🟢 1. Fake Data Loader
-def load_fake_sequence():
-    frames, boxes = generate_fake_video()
+def load_annotations(annotation_path):
+    """
+    Load bounding boxes from annotation file.
 
-    seq_data = {
-        "frames": frames,
-        "init_bbox": boxes[0],
-        "seq_name": "fake_seq"
-    }
+    Each line corresponds to one frame:
+    Format:
+        x,y,w,h  OR  x y w h
 
-    return [seq_data]  # list of sequences
+    Returns:
+        List of bounding boxes
+    """
+    boxes = []
+
+    with open(annotation_path, "r") as f:
+        for line in f:
+            line = line.strip()
+
+            # Handle both formats: comma or space
+            if "," in line:
+                x, y, w, h = map(float, line.split(","))
+            else:
+                x, y, w, h = map(float, line.split())
+
+            boxes.append([x, y, w, h])
+
+    return boxes
 
 
-# 🟢 2. Real Video Loader (لما الداتا تيجي)
-def load_video(video_path):
-    cap = cv2.VideoCapture(video_path)
-    frames = []
+def load_sequences(data_dir):
+    """
+    Load all sequences from dataset.
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frames.append(frame)
+    Steps:
+    1. Read manifest file
+    2. Iterate over sequences
+    3. Load video path and annotations
+    4. Prepare sequence objects
 
-    cap.release()
-    return frames
+    Returns:
+        List of sequences
+    """
+
+    manifest_path = os.path.join(data_dir, "metadata", "contestant_manifest.json")
+
+    with open(manifest_path, "r") as f:
+        manifest = json.load(f)
+
+    sequences = []
+
+    for split in manifest:  # train / public_lb
+        for seq_id, info in manifest[split].items():
+
+            video_path = os.path.join(data_dir, info["video_path"])
+            ann_path = info["annotation_path"]
+
+            # If annotation exists
+            if ann_path is not None:
+                ann_path = os.path.join(data_dir, ann_path)
+
+                if os.path.exists(ann_path):
+                    boxes = load_annotations(ann_path)
+                    init_bbox = boxes[0]  # first frame
+                else:
+                    boxes = None
+                    init_bbox = [0, 0, 0, 0]
+            else:
+                boxes = None
+                init_bbox = [0, 0, 0, 0]
+
+            sequences.append({
+                "video_path": video_path,
+                "boxes": boxes,
+                "init_bbox": init_bbox,
+                "seq_name": seq_id
+            })
+
+    return sequences

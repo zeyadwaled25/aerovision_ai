@@ -1,58 +1,42 @@
-import pandas as pd
+import cv2
 
-def run_simple_tracker(sequence):
-    import cv2
 
-    frames = sequence["frames"]
-    seq_name = sequence["seq_name"]
+def visualize_sequence(sequence):
+    """
+    Visualize video with bounding boxes.
 
-    results = []
+    Args:
+        sequence (dict): Contains video_path and boxes
+    """
 
-    for i, frame in enumerate(frames):
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    video_path = sequence["video_path"]
+    boxes = sequence["boxes"]
 
-        # جرّب threshold أقل
-        _, thresh = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY)
+    cap = cv2.VideoCapture(video_path)
 
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    frame_idx = 0
 
-        if contours:
-            c = max(contours, key=cv2.contourArea)
-            x, y, w, h = cv2.boundingRect(c)
-        else:
-            x, y, w, h = 0, 0, 0, 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-        print(f"Frame {i}: {x}, {y}")  # debug
+        # Draw Ground Truth bounding box
+        if boxes is not None and frame_idx < len(boxes):
+            x, y, w, h = map(int, boxes[frame_idx])
 
-        results.append({
-            "id": f"{seq_name}_{i}",
-            "x": x,
-            "y": y,
-            "w": w,
-            "h": h
-        })
+            # Skip invalid boxes (0,0,0,0)
+            if w > 0 and h > 0:
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (0,255,0), 2)
 
-    return results
+        # Display frame
+        cv2.imshow("Tracking (Ground Truth)", frame)
 
-def visualize_tracking(frames, results):
-    import cv2
-
-    for i, frame in enumerate(frames):
-        x = int(results[i]["x"])
-        y = int(results[i]["y"])
-        w = int(results[i]["w"])
-        h = int(results[i]["h"])
-
-        # رسم البوكس
-        cv2.rectangle(frame, (x, y), (x+w, y+h), (0,255,0), 2)
-
-        cv2.imshow("Tracking", frame)
-
+        # Press ESC to exit
         if cv2.waitKey(30) & 0xFF == 27:
             break
 
-    cv2.destroyAllWindows()
+        frame_idx += 1
 
-def save_results(all_results, path):
-    df = pd.DataFrame(all_results)
-    df.to_csv(path, index=False)
+    cap.release()
+    cv2.destroyAllWindows()

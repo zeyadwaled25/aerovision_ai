@@ -1,13 +1,16 @@
-from src.data_loader import load_fake_sequence
-from src.inference import run_simple_tracker, save_results, visualize_tracking
+from src.data_loader import load_sequences
+from src.inference import visualize_sequence
 
-sequences = load_fake_sequence()
 
-all_results = []
+# Load dataset
+sequences = load_sequences("data")
 
-for seq in sequences:
-    results = run_simple_tracker(seq)
-    all_results.extend(results)
+print(f"Number of sequences: {len(sequences)}")
 
-visualize_tracking(seq["frames"], results)
-save_results(all_results, "outputs/predictions.csv")
+# Select first sequence
+sequence = sequences[0]
+
+print("Playing:", sequence["seq_name"])
+
+# Visualize
+visualize_sequence(sequence)

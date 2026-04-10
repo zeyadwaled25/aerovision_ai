@@ -1,6 +1,34 @@
-venv/
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.log
+
+# Virtual Environment
+venv/
+.env/
+
+# Dataset
+data/
+
+# Outputs
 outputs/
+predictions/
 *.csv
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Models
+# *.pth
+# *.pt
+# *.ckpt
