@@ -1,3 +1,28 @@
+"""
+📌 Data Loader Module
+
+Purpose:
+Load dataset sequences using the provided contestant_manifest.json file.
+
+What it does:
+- Reads the manifest file
+- Retrieves video paths and annotation paths
+- Loads bounding box annotations
+- Prepares a unified sequence object
+
+Sequence Format:
+{
+    "video_path": str,
+    "boxes": List[[x, y, w, h]],
+    "init_bbox": [x, y, w, h],
+    "seq_name": str
+}
+
+Notes:
+- Supports both comma-separated and space-separated annotations
+- Handles missing annotations (e.g., test data)
+"""
+
 import json
 import os
 
@@ -64,6 +89,18 @@ def load_sequences(data_dir):
                 if os.path.exists(ann_path):
                     boxes = load_annotations(ann_path)
                     init_bbox = boxes[0]  # first frame
+
+                    # ✅ Validation
+                    valid_boxes = []
+                    for b in boxes:
+                        x, y, w, h = b
+                        # skip invalid boxes
+                        if x < 0 or y < 0:
+                            print("❌ Invalid bbox detected")
+                            continue
+                        valid_boxes.append(b)
+
+                    boxes = valid_boxes
                 else:
                     boxes = None
                     init_bbox = [0, 0, 0, 0]
