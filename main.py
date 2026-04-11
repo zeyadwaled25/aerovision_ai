@@ -16,6 +16,7 @@ Notes:
 
 from src.data_loader import load_sequences
 from src.inference import visualize_sequence
+from src.tracker import run_tracker
 
 # Load dataset
 sequences = load_sequences("data")
@@ -37,7 +38,7 @@ try:
       print(f"Frames with object: {len(valid_boxes)}")
       print(f"Visibility ratio: {len(valid_boxes)/total_frames:.2f}")
 
-    action = visualize_sequence(sequence)
+    action = run_tracker(sequence)
 
     if action == "stop":
       print("🛑 Stopped completely by user")
