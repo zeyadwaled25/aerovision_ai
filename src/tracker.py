@@ -1,27 +1,18 @@
 """
-📌 Tracker Module (OpenCV CSRT)
+📌 Tracker Module (OpenCV CSRT + Re-detection)
 
 Purpose:
-Perform online tracking using OpenCV tracker.
+Perform online tracking using OpenCV tracker + simple re-detection.
 
 Pipeline:
 1. Initialize tracker with first frame + init_bbox
-2. For each new frame:
-    - Predict new bounding box
-    - Draw prediction
-3. (Optional later) save predictions for submission
+2. Track object frame-by-frame
+3. If tracker fails → try re-detection using template matching
 """
 
 import cv2
 
 def run_tracker(sequence):
-    """
-    Run OpenCV tracker on a sequence.
-
-    Args:
-        sequence (dict): contains video_path + init_bbox
-    """
-
     video_path = sequence["video_path"]
     init_bbox = sequence["init_bbox"]
     seq_name = sequence["seq_name"]
@@ -33,17 +24,27 @@ def run_tracker(sequence):
     if not ret:
         print("❌ Failed to read video")
         return
+    
+    boxes = sequence["boxes"]
 
-    # Convert bbox to int
-    bbox = tuple(map(int, init_bbox))
+    # SCALE FACTOR
+    scale = 0.75
+
+    # Resize first frame
+    frame_small = cv2.resize(frame, None, fx=scale, fy=scale)
+
+    # Convert bbox to scaled coordinates
+    x, y, w, h = map(int, init_bbox)
+    bbox = (int(x * scale), int(y * scale), int(w * scale), int(h * scale))
+
 
     # Create tracker
     tracker = cv2.TrackerCSRT_create()
 
-    # Initialize tracker
-    tracker.init(frame, bbox)
+    tracker.init(frame_small, bbox)
 
     frame_idx = 0
+    last_bbox = bbox
 
     # Window setup
     cv2.namedWindow("Tracking (Prediction)", cv2.WINDOW_NORMAL)
@@ -54,41 +55,73 @@ def run_tracker(sequence):
         if not ret:
             break
 
-        h, w = frame.shape[:2]
+        # Resize frame for tracking
+        frame_small = cv2.resize(frame, None, fx=scale, fy=scale)
 
         # Predict new bbox
-        success, bbox = tracker.update(frame)
+        success, bbox = tracker.update(frame_small)
 
         if success:
+            last_bbox = bbox
             x, y, bw, bh = map(int, bbox)
 
-            # Draw predicted bbox (GREEN)
-            cv2.rectangle(frame, (x, y), (x+bw, y+bh), (0,255,0), 2)
+            # Convert back to original scale
+            x = int(x / scale)
+            y = int(y / scale)
+            bw = int(bw / scale)
+            bh = int(bh / scale)
 
-            # bbox values (NEW)
+            # Draw bbox
+            cv2.rectangle(frame, (x, y), (x+bw, y+bh), (255,0,0), 2)
+
+            # bbox values
             cv2.putText(frame, f"x:{x} y:{y} w:{bw} h:{bh}",
                         (x, y-10),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.5,
-                        (0,255,0),
+                        (255,0,0),
                         1)
 
             cv2.putText(frame, "Tracking",
                         (20,40),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         1,
-                        (0,255,0),
+                        (255,0,0),
                         2)
+
         else:
-            # Tracker lost object
-            cv2.putText(frame, "Lost",
+            # Freeze using last known bbox (scaled → original)
+            x, y, bw, bh = map(int, last_bbox)
+
+            x = int(x / scale)
+            y = int(y / scale)
+            bw = int(bw / scale)
+            bh = int(bh / scale)
+
+            cv2.rectangle(frame, (x, y), (x+bw, y+bh), (0,0,255), 2)
+
+            cv2.putText(frame, "Lost (Frozen)",
                         (20,40),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         1,
                         (0,0,255),
                         2)
 
-        # Frame index (NEW)
+        # Ground Truth
+        if boxes is not None and frame_idx < len(boxes):
+            xg, yg, wg, hg = map(int, boxes[frame_idx])
+
+            if wg > 0 and hg > 0:
+                cv2.rectangle(frame, (xg, yg), (xg+wg, yg+hg), (0,255,0), 2)
+
+                cv2.putText(frame, "GT",
+                            (xg, yg-10),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5,
+                            (0,255,0),
+                            1)
+
+        # Frame index
         cv2.putText(frame, f"Frame: {frame_idx}",
                     (20,80),
                     cv2.FONT_HERSHEY_SIMPLEX,
@@ -96,7 +129,7 @@ def run_tracker(sequence):
                     (255,0,0),
                     2)
 
-        # Sequence name (NEW)
+        # Sequence name
         cv2.putText(frame, f"Seq: {seq_name}",
                     (20,120),
                     cv2.FONT_HERSHEY_SIMPLEX,
@@ -104,18 +137,15 @@ def run_tracker(sequence):
                     (255,255,255),
                     2)
 
-        # Show frame
         cv2.imshow("Tracking (Prediction)", frame)
 
-        key = cv2.waitKey(30) & 0xFF
+        key = cv2.waitKey(12) & 0xFF
 
-        # ESC → next sequence
         if key == 27:
             cap.release()
             cv2.destroyAllWindows()
             return "next"
 
-        # Q → stop all
         if key == ord('q'):
             cap.release()
             cv2.destroyAllWindows()
