@@ -11,6 +11,7 @@ Pipeline:
 """
 
 import cv2
+from src.utils.metrics import compute_iou, center_distance
 
 def run_tracker(sequence):
     video_path = sequence["video_path"]
@@ -23,7 +24,10 @@ def run_tracker(sequence):
     ret, frame = cap.read()
     if not ret:
         print("❌ Failed to read video")
-        return
+        return {
+            "predictions": [],
+            "status": "failed"
+        }
     
     boxes = sequence["boxes"]
 
@@ -43,12 +47,21 @@ def run_tracker(sequence):
 
     tracker.init(frame_small, bbox)
 
-    frame_idx = 0
+    frame_idx = 1
     last_bbox = bbox
 
     # Window setup
     cv2.namedWindow("Tracking (Prediction)", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Tracking (Prediction)", 1150, 750)
+
+    # Predictions
+    predictions = [{
+        "id": f"{seq_name}_0",
+        "x": int(init_bbox[0]),
+        "y": int(init_bbox[1]),
+        "w": int(init_bbox[2]),
+        "h": int(init_bbox[3])
+    }]
 
     while True:
         ret, frame = cap.read()
@@ -70,6 +83,14 @@ def run_tracker(sequence):
             y = int(y / scale)
             bw = int(bw / scale)
             bh = int(bh / scale)
+
+            predictions.append({
+                "id": f"{seq_name}_{frame_idx}",
+                "x": x,
+                "y": y,
+                "w": bw,
+                "h": bh
+            })
 
             # Draw bbox
             cv2.rectangle(frame, (x, y), (x+bw, y+bh), (255,0,0), 2)
@@ -98,6 +119,14 @@ def run_tracker(sequence):
             bw = int(bw / scale)
             bh = int(bh / scale)
 
+            predictions.append({
+                "id": f"{seq_name}_{frame_idx}",
+                "x": x,
+                "y": y,
+                "w": bw,
+                "h": bh
+            })
+
             cv2.rectangle(frame, (x, y), (x+bw, y+bh), (0,0,255), 2)
 
             cv2.putText(frame, "Lost (Frozen)",
@@ -120,6 +149,26 @@ def run_tracker(sequence):
                             0.5,
                             (0,255,0),
                             1)
+            
+                gt_box = boxes[frame_idx]
+                pred_box = [x, y, bw, bh]
+
+                iou = compute_iou(pred_box, gt_box)
+                dist = center_distance(pred_box, gt_box)
+
+                cv2.putText(frame, f"IoU: {iou:.2f}",
+                            (20,160),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            (255,255,0),
+                            2)
+
+                cv2.putText(frame, f"Dist: {dist:.1f}",
+                            (20,200),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            (255,255,0),
+                            2)
 
         # Frame index
         cv2.putText(frame, f"Frame: {frame_idx}",
@@ -144,15 +193,15 @@ def run_tracker(sequence):
         if key == 27:
             cap.release()
             cv2.destroyAllWindows()
-            return "next"
+            return {"status": "next", "predictions": predictions}
 
         if key == ord('q'):
             cap.release()
             cv2.destroyAllWindows()
-            return "stop"
+            return {"status": "stop", "predictions": predictions}
 
         frame_idx += 1
 
     cap.release()
     cv2.destroyAllWindows()
-    return "done"
+    return {"status": "done", "predictions": predictions}

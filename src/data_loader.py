@@ -55,7 +55,7 @@ def load_annotations(annotation_path):
     return boxes
 
 
-def load_sequences(data_dir):
+def load_sequences(data_dir, split="train"):
     """
     Load all sequences from dataset.
 

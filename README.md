@@ -1,53 +1,85 @@
 # AeroVision Tracker
 
-A small object-tracking prototype built around synthetic video frames. The current pipeline generates a fake moving object, runs a simple contour-based tracker with OpenCV, and exports frame-level bounding-box predictions to CSV.
+A manifest-driven object tracking pipeline for video datasets. The project loads many sequences from `data/metadata/contestant_manifest.json`, runs OpenCV CSRT tracking per sequence, overlays predictions and ground truth, computes tracking metrics, and exports all predictions to CSV.
 
-## What It Does
+## Features
 
-- Generates a fake video sequence with a moving white object.
-- Detects the object in each frame using grayscale thresholding and contour extraction.
-- Saves tracking results to `outputs/predictions.csv`.
-- Includes a basic visualization helper for inspecting tracked frames.
+- Loads sequences from a central manifest file.
+- Supports annotation files with either `x,y,w,h` or `x y w h` format.
+- Tracks objects online with OpenCV CSRT (`cv2.TrackerCSRT_create`).
+- Shows real-time visualization with prediction box, ground truth box, IoU, and center distance.
+- Computes per-sequence metrics:
+  - Average IoU
+  - Average center distance
+  - Success AUC
+  - Robustness (failure ratio)
+- Saves aggregated predictions to `outputs/predictions.csv`.
 
 ## Project Structure
 
-- `main.py` - entry point that loads a sequence, runs tracking, visualizes results, and saves predictions.
-- `src/data_loader.py` - loads fake sequences and provides a placeholder video loader.
-- `src/fake_data.py` - creates synthetic frames and ground-truth boxes.
-- `src/inference.py` - contains the simple tracker, visualization, and CSV export.
-- `data/` - data folder and manifest placeholder.
-- `models/` - reserved for future model files.
-- `notebooks/` - experimentation notebooks.
-- `outputs/` - prediction outputs.
+- `main.py`: Entry point. Loads all sequences, runs tracking, evaluates, and saves CSV output.
+- `src/data_loader.py`: Parses manifest and annotations, builds normalized sequence objects.
+- `src/tracker.py`: CSRT tracker loop, OpenCV visualization, keyboard controls, prediction collection.
+- `src/evaluate.py`: Sequence-level evaluation logic and metric aggregation.
+- `src/utils/metrics.py`: IoU, center distance, success curve, precision curve, AUC, robustness helpers.
+- `src/inference.py`: Ground-truth visualization utility.
+- `data/`: Datasets and `metadata/contestant_manifest.json`.
+- `outputs/`: Generated artifacts such as `predictions.csv`.
 
-## Requirements
+## Data Contract
 
-Python 3.10+ is recommended. Install the dependencies with:
+Each loaded sequence follows this schema:
+
+```python
+{
+		"video_path": str,
+		"boxes": list[list[float]],   # [x, y, w, h] per frame, or None
+		"init_bbox": list[float],     # first valid bbox or [0, 0, 0, 0]
+		"seq_name": str
+}
+```
+
+The loader expects:
+
+- Manifest: `data/metadata/contestant_manifest.json`
+- Manifest fields per sequence:
+  - `video_path`
+  - `annotation_path` (can be `null` for unlabeled/test sequences)
+
+## Installation
+
+Python 3.10+ recommended.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Run The Demo
+## Run
 
-From the project root:
+From project root:
 
 ```bash
 python main.py
 ```
 
-This will:
+Pipeline behavior:
 
-1. Generate a fake sequence.
-2. Run the tracker over each frame.
-3. Open a visualization window with tracked boxes.
-4. Write predictions to `outputs/predictions.csv`.
+1. Load all sequences from the manifest.
+2. For each sequence, print visibility stats based on valid ground-truth boxes.
+3. Track frame-by-frame with CSRT.
+4. Evaluate predictions against ground truth (when available).
+5. Append all predictions and write `outputs/predictions.csv`.
 
-## Output Format
+## Keyboard Controls During Tracking
 
-The exported CSV contains one row per frame with these columns:
+- `Esc`: Skip current sequence and continue to the next one.
+- `q`: Stop the full run immediately.
 
-- `id`
+## Output CSV
+
+`outputs/predictions.csv` contains one row per tracked frame:
+
+- `id`: `<sequence_name>_<frame_index>`
 - `x`
 - `y`
 - `w`
@@ -55,15 +87,12 @@ The exported CSV contains one row per frame with these columns:
 
 ## Notes
 
-- The current implementation is a baseline tracker, not a trained production model.
-- `load_video()` is available in `src/data_loader.py` for future real-video support.
-- The fake data generator currently produces a single moving object on a black background, which makes the demo easy to validate.
+- Tracking runs on resized frames (`scale = 0.75`) for speed, then boxes are mapped back to original resolution.
+- If the tracker loses the object in a frame, the last known box is reused (frozen prediction).
+- For sequences without annotations, evaluation metrics are skipped.
 
-## Next Steps
+## Known Limitations
 
-Potential improvements include:
-
-- plugging in a stronger tracking model,
-- adding evaluation metrics,
-- supporting real input videos,
-- and cleaning up the visualization flow for batch runs.
+- Single-object tracking only.
+- Uses classical CSRT tracking (no deep re-identification).
+- No automatic experiment logging beyond printed metrics and CSV output.
