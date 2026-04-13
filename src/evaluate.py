@@ -1,3 +1,14 @@
+"""
+📌 Evaluation Module
+
+Purpose:
+Evaluate tracking predictions against Ground Truth.
+
+Overview:
+- Compute IoU and center distance per frame
+- Aggregate metrics (IoU, AUC, precision, robustness)
+"""
+
 import numpy as np
 from src.utils.metrics import (
     compute_iou,
@@ -5,8 +16,24 @@ from src.utils.metrics import (
     success_curve,
     precision_curve,
     compute_auc,
-    compute_robustness,
 )
+
+
+def compute_precision_at_threshold(distances, threshold=20):
+    # 🔹 نسبة الفريمات اللي distance فيها أقل من threshold
+    distances = np.array(distances)
+    return np.mean(distances <= threshold)
+
+
+def compute_robustness_threshold(ious, threshold=0.2):
+    """
+    🔹 Failure = IoU أقل من threshold
+    🔹 Robustness = نسبة الفشل
+    """
+    ious = np.array(ious)
+    failures = ious < threshold
+    return np.mean(failures)
+
 
 def evaluate(sequence, predictions):
     boxes = sequence["boxes"]
@@ -14,12 +41,15 @@ def evaluate(sequence, predictions):
     ious = []
     distances = []
 
+    # 🔹 Loop over frames
     for i, pred in enumerate(predictions):
+
         if boxes is None or i >= len(boxes):
             continue
 
         gt = boxes[i]
 
+        # Skip invalid GT
         if gt[2] == 0 or gt[3] == 0:
             continue
 
@@ -34,23 +64,27 @@ def evaluate(sequence, predictions):
     if len(ious) == 0:
         return {}
 
-    # Averages
+    # =========================
+    # 🔹 Aggregated Metrics
+    # =========================
+
     avg_iou = np.mean(ious)
     avg_dist = np.mean(distances)
 
-    # Success Curve + AUC
-    th_s, success = success_curve(ious)
+    # 🔹 Success Curve → AUC
+    _, success = success_curve(ious)
     auc = compute_auc(success)
 
-    # Precision Curve
-    th_p, precision = precision_curve(distances)
+    # 🔹 Precision
+    precision_20 = compute_precision_at_threshold(distances, threshold=20)
 
-    # Robustness
-    robustness = compute_robustness(ious)
+    # 🔹 Robustness (IoU threshold-based)
+    robustness = compute_robustness_threshold(ious, threshold=0.2)
 
     return {
         "avg_iou": avg_iou,
         "avg_dist": avg_dist,
         "auc": auc,
+        "precision@20px": precision_20,
         "robustness": robustness,
     }
