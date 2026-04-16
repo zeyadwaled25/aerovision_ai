@@ -11,12 +11,14 @@ Overview:
 - Evaluate performance (train only)
 - Save results to CSV
 """
-
+import sys
+sys.path.append("./pysot")
 import numpy as np
 import pandas as pd
 
 from src.data_loader import load_sequences
-from src.tracker import run_tracker
+# from src.tracker import run_tracker
+from src.siam_tracker import run_tracker
 from src.evaluate import evaluate
 
 
