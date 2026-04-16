@@ -1,14 +1,15 @@
 """
-📌 SiamRPN Tracker
+📌 SiamRPN Tracker (Competition Version)
 
 Purpose:
-Run SiamRPN tracker with production-ready visualization and stable predictions.
+Robust SiamRPN tracking with stability improvements.
 
-Overview:
-- Full SiamRPN tracking (no fallback)
-- Clean UI (same style)
-- Safe bounding boxes (clip)
-- Optional GT visualization + metrics
+Enhancements:
+- Confidence-based freeze
+- Motion constraint
+- Size constraint
+- EMA smoothing
+- Optional visualization (for submission speed)
 """
 
 import cv2
@@ -18,7 +19,7 @@ from pysot.core.config import cfg
 from pysot.models.model_builder import ModelBuilder
 from pysot.tracker.tracker_builder import build_tracker
 
-# 🔹 CONFIG + MODEL
+# 🔹 CONFIG
 cfg.merge_from_file("models/config.yaml")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -28,6 +29,13 @@ model.load_state_dict(torch.load("models/siamrpn.pth", map_location=device))
 model.eval().to(device)
 
 tracker = build_tracker(model)
+
+# 🔹 SETTINGS
+SCORE_TH = 0.4
+MAX_JUMP = 100
+ALPHA = 0.7
+VISUALIZE = True  # Set to False for faster submission (no visualization)
+
 
 # 🔹 HELPERS
 def clip_box(box, w, h):
@@ -41,7 +49,7 @@ def clip_box(box, w, h):
     return [x, y, bw, bh]
 
 
-# 🔹 MAIN TRACKER
+# 🔹 TRACKER
 def run_tracker(sequence):
     video_path = sequence["video_path"]
     init_bbox = sequence["init_bbox"]
@@ -58,9 +66,11 @@ def run_tracker(sequence):
 
     tracker.init(frame, (x, y, w, h))
 
-    # 🔹 Window
-    cv2.namedWindow("Tracking (SiamRPN)", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Tracking (SiamRPN)", 1150, 750)
+    last_bbox = [x, y, w, h]
+
+    if VISUALIZE:
+        cv2.namedWindow("Tracking (Prediction)", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("Tracking (Prediction)", 1150, 750)
 
     predictions = [{
         "id": f"{seq_name}_0",
@@ -82,14 +92,43 @@ def run_tracker(sequence):
         score = float(outputs.get("best_score", 0))
 
         x, y, w, h = map(int, bbox)
+
+        # 1. Motion Constraint
+        dx = abs(x - last_bbox[0])
+        dy = abs(y - last_bbox[1])
+
+        if dx > MAX_JUMP or dy > MAX_JUMP:
+            x, y, w, h = last_bbox
+
+        # 2. Size Constraint
+        area = w * h
+        last_area = last_bbox[2] * last_bbox[3]
+
+        if last_area > 0:
+            ratio = area / last_area
+            if ratio > 2 or ratio < 0.5:
+                w, h = last_bbox[2], last_bbox[3]
+
+        # 3. Confidence Freeze
+        if score < SCORE_TH:
+            x, y, w, h = last_bbox
+            tracking_ok = False
+        else:
+            tracking_ok = True
+
+        # 4. EMA Smoothing
+        x = int(ALPHA * x + (1 - ALPHA) * last_bbox[0])
+        y = int(ALPHA * y + (1 - ALPHA) * last_bbox[1])
+        w = int(ALPHA * w + (1 - ALPHA) * last_bbox[2])
+        h = int(ALPHA * h + (1 - ALPHA) * last_bbox[3])
+
+        # 🔹 Clip
         x, y, w, h = clip_box([x, y, w, h], w_img, h_img)
 
-        # 🔹 status
-        tracking_ok = score > 0.4
+        # 🔹 Update last bbox
+        last_bbox = [x, y, w, h]
 
-        color = (255, 0, 0) if tracking_ok else (0, 0, 255)
-        label = "Tracking" if tracking_ok else "Uncertain"
-
+        # 🔹 Save
         predictions.append({
             "id": f"{seq_name}_{frame_idx}",
             "x": x,
@@ -98,85 +137,61 @@ def run_tracker(sequence):
             "h": h
         })
 
-        # 🔹 DRAW
-        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+        # 🔹 Visualization
+        if VISUALIZE:
+            color = (255, 0, 0) if tracking_ok else (0, 0, 255)
+            label = "Tracking" if tracking_ok else "Frozen"
 
-        # status
-        cv2.putText(frame, label,
-                    (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    color,
-                    2)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
 
-        # score
-        cv2.putText(frame, f"Score: {score:.2f}",
-                    (20, 80),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 255),
-                    2)
+            cv2.putText(frame, label,
+                        (20, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1,
+                        color,
+                        2)
 
-        # frame index
-        cv2.putText(frame, f"Frame: {frame_idx}",
-                    (20, 120),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 0, 0),
-                    2)
+            cv2.putText(frame, f"Score: {score:.2f}",
+                        (20, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 255, 255),
+                        2)
 
-        # sequence name
-        cv2.putText(frame, f"Seq: {seq_name}",
-                    (20, 160),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (255, 255, 255),
-                    2)
+            cv2.putText(frame, f"Frame: {frame_idx}",
+                        (20, 120),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (255, 0, 0),
+                        2)
 
-        # 🔹 Ground Truth + Metrics
-        if boxes is not None and frame_idx < len(boxes):
-            xg, yg, wg, hg = map(int, boxes[frame_idx])
+            cv2.putText(frame, f"Seq: {seq_name}",
+                        (20, 160),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        2)
 
-            if wg > 0 and hg > 0:
-                cv2.rectangle(frame, (xg, yg), (xg + wg, yg + hg), (0, 255, 0), 2)
+            # GT (optional)
+            if boxes is not None and frame_idx < len(boxes):
+                xg, yg, wg, hg = map(int, boxes[frame_idx])
+                if wg > 0 and hg > 0:
+                    cv2.rectangle(frame, (xg, yg), (xg + wg, yg + hg), (0, 255, 0), 2)
 
-                # IoU + Distance
-                from src.utils.metrics import compute_iou, center_distance
+            cv2.imshow("Tracking (Prediction)", frame)
 
-                iou = compute_iou([x, y, w, h], boxes[frame_idx])
-                dist = center_distance([x, y, w, h], boxes[frame_idx])
+            key = cv2.waitKey(10) & 0xFF
 
-                cv2.putText(frame, f"IoU: {iou:.2f}",
-                            (20, 200),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.6,
-                            (255, 255, 0),
-                            2)
-
-                cv2.putText(frame, f"Dist: {dist:.1f}",
-                            (20, 240),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.6,
-                            (255, 255, 0),
-                            2)
-
-        cv2.imshow("Tracking (SiamRPN)", frame)
-
-        key = cv2.waitKey(10) & 0xFF
-
-        if key == 27:
-            cap.release()
-            cv2.destroyAllWindows()
-            return {"status": "next", "predictions": predictions}
-
-        if key == ord('q'):
-            cap.release()
-            cv2.destroyAllWindows()
-            return {"status": "stop", "predictions": predictions}
+            if key == 27:
+                break
+            if key == ord('q'):
+                return {"status": "stop", "predictions": predictions}
 
         frame_idx += 1
 
     cap.release()
-    cv2.destroyAllWindows()
+
+    if VISUALIZE:
+        cv2.destroyAllWindows()
 
     return {"status": "done", "predictions": predictions}
