@@ -29,6 +29,6 @@ Thumbs.db
 .idea/
 
 # Models
-# *.pth
-# *.pt
-# *.ckpt
+*.pth
+*.pt
+*.ckpt
