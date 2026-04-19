@@ -20,15 +20,15 @@ from src.utils.metrics import (
 
 
 def compute_precision_at_threshold(distances, threshold=20):
-    # 🔹 نسبة الفريمات اللي distance فيها أقل من threshold
+    # نسبة الفريمات اللي distance فيها أقل من threshold
     distances = np.array(distances)
     return np.mean(distances <= threshold)
 
 
 def compute_robustness_threshold(ious, threshold=0.2):
     """
-    🔹 Failure = IoU أقل من threshold
-    🔹 Robustness = نسبة الفشل
+        Failure = IoU أقل من threshold
+        Robustness = نسبة الفشل
     """
     ious = np.array(ious)
     failures = ious < threshold
@@ -41,7 +41,7 @@ def evaluate(sequence, predictions):
     ious = []
     distances = []
 
-    # 🔹 Loop over frames
+    # Loop over frames
     for i, pred in enumerate(predictions):
 
         if boxes is None or i >= len(boxes):
@@ -64,21 +64,18 @@ def evaluate(sequence, predictions):
     if len(ious) == 0:
         return {}
 
-    # =========================
-    # 🔹 Aggregated Metrics
-    # =========================
-
+    # Aggregated Metrics
     avg_iou = np.mean(ious)
     avg_dist = np.mean(distances)
 
-    # 🔹 Success Curve → AUC
+    # Success Curve → AUC
     _, success = success_curve(ious)
     auc = compute_auc(success)
 
-    # 🔹 Precision
+    # Precision
     precision_20 = compute_precision_at_threshold(distances, threshold=20)
 
-    # 🔹 Robustness (IoU threshold-based)
+    # Robustness (IoU threshold-based)
     robustness = compute_robustness_threshold(ious, threshold=0.2)
 
     return {

@@ -29,7 +29,7 @@ def load_annotations(annotation_path):
         for line in f:
             line = line.strip()
 
-            # 🔹 Handle comma or space format
+            # Handle comma or space format
             if "," in line:
                 x, y, w, h = map(float, line.split(","))
             else:
@@ -59,13 +59,13 @@ def load_sequences(data_dir, split="train"):
 
     sequences = []
 
-    # 🔹 Loop only on selected split
+    # Loop only on selected split
     for seq_id, info in manifest[split].items():
 
         video_path = os.path.join(data_dir, info["video_path"])
         ann_path = info["annotation_path"]
 
-        # 🔹 Load annotations if available
+        # Load annotations if available
         if ann_path is not None:
             ann_path = os.path.join(data_dir, ann_path)
 
@@ -73,15 +73,24 @@ def load_sequences(data_dir, split="train"):
                 boxes = load_annotations(ann_path)
                 init_bbox = boxes[0]
 
-                # 🔹 Basic validation (remove invalid boxes)
+                # Basic validation (Keep 1:1 frame mapping)
                 valid_boxes = []
                 for b in boxes:
                     x, y, w, h = b
-                    if x < 0 or y < 0:
-                        continue
-                    valid_boxes.append(b)
+
+                    # If invalid box, replace with dummy (0,0,0,0)
+                    if x < 0 or y < 0 or w <= 0 or h <= 0:
+                        valid_boxes.append([0.0, 0.0, 0.0, 0.0])
+                    else:
+                        valid_boxes.append(b)
 
                 boxes = valid_boxes
+                
+                # Add sequence with valid boxes
+                for b in boxes:
+                    if b[2] > 0 and b[3] > 0:
+                        init_bbox = b
+                        break
 
             else:
                 boxes = None

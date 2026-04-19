@@ -16,7 +16,7 @@ import numpy as np
 
 
 def compute_iou(boxA, boxB):
-    # 🔹 Intersection
+    # Intersection
     xA = max(boxA[0], boxB[0])
     yA = max(boxA[1], boxB[1])
     xB = min(boxA[0] + boxA[2], boxB[0] + boxB[2])
@@ -26,7 +26,7 @@ def compute_iou(boxA, boxB):
     interH = max(0, yB - yA)
     interArea = interW * interH
 
-    # 🔹 Areas
+    # Areas
     boxAArea = boxA[2] * boxA[3]
     boxBArea = boxB[2] * boxB[3]
 
@@ -39,7 +39,7 @@ def compute_iou(boxA, boxB):
 
 
 def center_distance(boxA, boxB):
-    # 🔹 Compute centers
+    # Compute centers
     cxA = boxA[0] + boxA[2] / 2
     cyA = boxA[1] + boxA[3] / 2
 
@@ -50,7 +50,7 @@ def center_distance(boxA, boxB):
 
 
 def success_curve(ious, thresholds=None):
-    # 🔹 IoU thresholds → success rate
+    # IoU thresholds → success rate
     if thresholds is None:
         thresholds = np.linspace(0, 1, 21)
 
@@ -62,7 +62,7 @@ def success_curve(ious, thresholds=None):
 
 
 def precision_curve(distances, thresholds=None):
-    # 🔹 Distance thresholds → precision
+    # Distance thresholds → precision
     if thresholds is None:
         thresholds = np.arange(0, 51, 1)
 
@@ -74,16 +74,16 @@ def precision_curve(distances, thresholds=None):
 
 
 def normalized_precision(distances, diag):
-    # 🔹 Normalize distances (optional use)
+    # Normalize distances (optional use)
     return [d / diag for d in distances]
 
 
 def compute_auc(success_scores):
-    # 🔹 Area under success curve
+    # Area under success curve
     return np.mean(success_scores)
 
 
-def compute_robustness(ious, threshold=0.1):
-    # 🔹 Failure = IoU < threshold
+def compute_robustness(ious, threshold=0.2):
+    # Failure = IoU < threshold
     ious = np.array(ious)
     return np.mean(ious < threshold)
