@@ -8,7 +8,6 @@ __pycache__/
 # Virtual Environment
 venv/
 .env/
-pysot/
 
 # Dataset
 data/

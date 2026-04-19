@@ -12,21 +12,22 @@ Overview:
 - Save results to CSV
 """
 import sys
-sys.path.append("./pysot")
+# sys.path.append("./pysot")
 import numpy as np
 import pandas as pd
 
 from src.data_loader import load_sequences
 # from src.tracker import run_tracker
-from src.siam_tracker import run_tracker
+# from src.siam_tracker import run_tracker
+from src.tctrack_tracker import run_tracker
 from src.evaluate import evaluate
 
 
 def main():
 
     # 🔹 Load dataset (train / public_lb)
-    sequences = load_sequences("data", split="train")
-    # sequences = load_sequences("data", split="public_lb")
+    # sequences = load_sequences("data", split="train")
+    sequences = load_sequences("data", split="public_lb")
 
     print(f"Number of sequences: {len(sequences)}")
 
