@@ -13,6 +13,24 @@ Overview:
 """
 import sys
 # sys.path.append("./pysot")
+import torch
+from unittest.mock import MagicMock
+
+# ==========================================
+# 🛠️ Legacy Compatibility Patch (The Ninja Hack)
+# ==========================================
+if 'torch._six' not in sys.modules:
+    class _Six:
+        string_classes = (str,)
+        int_classes = (int,)
+    sys.modules['torch._six'] = _Six()
+    torch._six = _Six()
+
+if 'visdom' not in sys.modules:
+    mock_visdom = MagicMock()
+    sys.modules['visdom'] = mock_visdom
+    sys.modules['visdom.server'] = mock_visdom
+
 import numpy as np
 import pandas as pd
 
@@ -20,9 +38,9 @@ from src.data_loader import load_sequences
 # from src.tracker import run_tracker
 # from src.siam_tracker import run_tracker
 # from src.tctrack_tracker import run_tracker
-from src.tctrack_plusplus_tracker import run_tracker
+# from src.tctrack_plusplus_tracker import run_tracker
+from src.ostrack_tracker import run_tracker
 from src.evaluate import evaluate
-
 
 def main():
 
