@@ -39,7 +39,8 @@ from src.data_loader import load_sequences
 # from src.siam_tracker import run_tracker
 # from src.tctrack_tracker import run_tracker
 # from src.tctrack_plusplus_tracker import run_tracker
-from src.ostrack_tracker import run_tracker
+# from src.ostrack_tracker import run_tracker
+from src.hift_tracker import run_tracker
 from src.evaluate import evaluate
 
 def main():

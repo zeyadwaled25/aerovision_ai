@@ -1,10 +1,14 @@
 """
-📌 TCTrack++ — The ULTRA Edition (Pushing the Limits)
+📌 HiFT — The Ultimate Hybrid SOTA Edition
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🏆 Ultimate Upgrades:
-  [1] Dynamic Template Fusion (Memory Updating without Retraining)
-  [2] Alpha-Beta Kinematic Filter (Advanced Occlusion Prediction)
-  [3] Auto-Memory Revert (Protects against target poisoning)
+🏆 Architecture: Hierarchical Feature Transformer (HiFT)
+🏆 Post-Processing: Ultimate Hybrid SOTA Decision Engine
+  - Smooth Exponential Penalties (No Hard Cliffs)
+  - Adaptive Tracking History (consecutive_tracks, recent_max_speed)
+  - Asymmetric Size Gating (Growth vs. Shrink)
+  - Two-Tier Proportional Tiny Object Boost
+  - Score Floor Safety Net
+  - Residual Momentum in Deep Lost Phase
 """
 
 import cv2
@@ -12,46 +16,34 @@ import torch
 import sys
 import math
 import numpy as np
-import random
-
-# ==========================================
-# 🛡️ REPRODUCIBILITY LOCK (KAGGLE STANDARD)
-# ==========================================
-def set_deterministic_seed(seed=42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-set_deterministic_seed(42)
+import os
 
 # =========================
 # PATH CONFIG
 # =========================
-if "./tctrack" not in sys.path:
-    sys.path.insert(0, "./tctrack")
+# ضبط المسار بناءً على هيكلة الملفات الجديدة
+if "./HiFT" not in sys.path:
+    sys.path.insert(0, "./HiFT")
 
 from pysot.core.config import cfg
-from pysot.models.utile_tctrackplus.model_builder import ModelBuilder_tctrackplus 
-from pysot.tracker.tctrack_tracker import TCTrackTracker
+from pysot.models.model_builder import ModelBuilder 
+from pysot.tracker.hift_tracker import HiFTTracker
 from pysot.utils.model_load import load_pretrain
 
-CONFIG_PATH = "./tctrack/experiments/TCTrack++/config.yaml"
-WEIGHTS_PATH = "./models/tctrack++.pth" 
+CONFIG_PATH = "./HiFT/experiments/config.yaml"
+WEIGHTS_PATH = "./models/hift.pth" 
 
 cfg.merge_from_file(CONFIG_PATH)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-print("⏳ Loading TCTrack++ (ULTRA Edition with Dynamic Memory)...")
+print("⏳ Loading HiFT (Transformer Backbone + Ultimate SOTA Engine)...")
 
-model = ModelBuilder_tctrackplus('test')
+model = ModelBuilder()
 model = load_pretrain(model, WEIGHTS_PATH).to(device).eval()
 
-TUNED_HP = [0.05, 0.55, 0.15]
-
+# =========================
+# UTILS & HELPERS
+# =========================
 def clip_box(box, W, H):
     return [
         max(0, min(box[0], W - 1)),
@@ -64,10 +56,11 @@ def soft_clip(val, lo, hi):
     return max(lo, min(val, hi))
 
 def soft_penalty(excess_ratio: float, lo: float = 0.6) -> float:
+    """Returns a multiplier in [lo, 1.0] using smooth exponential decay."""
     return lo + (1.0 - lo) * math.exp(-excess_ratio)
 
 # =========================
-# 🧠 TEMPORAL STATE (Alpha-Beta Filter added)
+# 🧠 TEMPORAL STATE (Hybrid)
 # =========================
 class TemporalState:
     def __init__(self, init_bbox):
@@ -78,8 +71,6 @@ class TemporalState:
         
         self.vx_ema = 0.0
         self.vy_ema = 0.0
-        self.ax_ema = 0.0 # Acceleration X
-        self.ay_ema = 0.0 # Acceleration Y
         
         self.stable_w = init_bbox[2]
         self.stable_h = init_bbox[3]
@@ -93,8 +84,10 @@ class TemporalState:
 
     def dynamic_threshold(self):
         mean_score = sum(self.score_history) / max(1, len(self.score_history))
+        
         motion_factor = min(2.0, 1.0 + self.recent_max_speed / 15.0)
         th_floor = 0.15 if self.recent_max_speed > 10 else 0.18
+        
         th = max(th_floor, mean_score * (0.50 / motion_factor))
         
         base_max_lost = 12 if mean_score > 0.50 else 25
@@ -111,7 +104,7 @@ class TemporalState:
         return th, max_lost
 
 # =========================
-# ⚙️ DECISION ENGINE
+# ⚙️ DECISION ENGINE (Hybrid)
 # =========================
 def decision_engine(state, raw_bbox, raw_score, tracker, frame_shape, init_size):
     raw_x, raw_y, raw_w, raw_h = raw_bbox
@@ -130,6 +123,7 @@ def decision_engine(state, raw_bbox, raw_score, tracker, frame_shape, init_size)
     box_diag = math.hypot(csv_box[2], csv_box[3])
     current_speed = math.hypot(state.vx_ema, state.vy_ema)
 
+    # ========== 1. TWO-TIER PROPORTIONAL TINY OBJECT BOOST ==========
     area = raw_w * raw_h
     if area < 1000 and raw_score > dynamic_th * 0.8: 
         boost_factor = 1.0 + 0.1 * ((raw_score - dynamic_th * 0.8) / (1.0 - dynamic_th * 0.8))
@@ -137,10 +131,12 @@ def decision_engine(state, raw_bbox, raw_score, tracker, frame_shape, init_size)
     elif area < 400 and raw_score > 0.45:
         score *= 1.03
 
+    # ========== 2. MOTION-ADAPTIVE VELOCITY CONSISTENCY ==========
     if state.lost_counter == 0 and box_diag > 0:
         pred_vx = raw_cx - prev_cx
         pred_vy = raw_cy - prev_cy
         velocity_diff = math.hypot(pred_vx - state.vx_ema, pred_vy - state.vy_ema)
+        
         speed_tolerance = box_diag * (1.5 + min(2.0, current_speed / 10.0))
         
         if velocity_diff > speed_tolerance:
@@ -150,6 +146,7 @@ def decision_engine(state, raw_bbox, raw_score, tracker, frame_shape, init_size)
         instant_speed = math.hypot(pred_vx, pred_vy)
         state.recent_max_speed = 0.9 * state.recent_max_speed + 0.1 * instant_speed
 
+    # ========== 3. MOTION-AWARE DISTANCE PENALTY ==========
     dist = math.hypot(raw_cx - prev_cx, raw_cy - prev_cy)
     base_dist_th = max(40.0, 2.0 * max(csv_box[2], csv_box[3]))
     dist_th = base_dist_th + current_speed * 2.0 
@@ -161,25 +158,41 @@ def decision_engine(state, raw_bbox, raw_score, tracker, frame_shape, init_size)
         dist_excess = (dist - dist_th) / max(dist_th, 1.0)
         score *= soft_penalty(dist_excess, lo=0.75)
 
+    # ========== 4. ASYMMETRIC SIZE EXPLOSION PROTECTION ==========
     stable_area = max(1.0, state.stable_w * state.stable_h)
     size_ratio = (raw_w * raw_h) / stable_area
+    
     if size_ratio > 2.5:
-        score *= soft_penalty((size_ratio - 2.5) / 2.5, lo=0.82) 
+        excess = (size_ratio - 2.5) / 2.5
+        score *= soft_penalty(excess, lo=0.82) 
     elif size_ratio < 0.4:
-        score *= soft_penalty((0.4 - size_ratio) / 0.4, lo=0.75) 
+        excess = (0.4 - size_ratio) / 0.4
+        score *= soft_penalty(excess, lo=0.75) 
 
+    # ========== 5. SMART TRAJECTORY PENALTY ==========
     if state.lost_counter < 3:
         pot_vx = raw_cx - prev_cx
         pot_vy = raw_cy - prev_cy
+        
         if 5.0 < current_speed <= 15.0 and dist > 5.0:
             direction_change = abs(math.atan2(state.vy_ema, state.vx_ema) - math.atan2(pot_vy + 1e-9, pot_vx + 1e-9))
             direction_change = min(direction_change, 2 * math.pi - direction_change)
+            
             if direction_change > 2.5:
-                score *= soft_penalty((direction_change - 2.5) / 2.5, lo=0.82)
+                turn_excess = (direction_change - 2.5) / 2.5
+                score *= soft_penalty(turn_excess, lo=0.82)
 
-    if state.lost_counter > 8: score *= 1.08  
-    if state.lost_counter > 3: score *= (1.0 + min(0.08, (state.lost_counter - 3) * 0.01))
-    if state.lost_counter > 5 and raw_score > dynamic_th * 0.75: score = max(score, dynamic_th * 0.88)
+    # ========== 6. PROGRESSIVE RECOVERY BOOST ==========
+    if state.lost_counter > 8:
+        score *= 1.08  
+        
+    if state.lost_counter > 3:
+        progressive_boost = 1.0 + min(0.08, (state.lost_counter - 3) * 0.01)
+        score *= progressive_boost
+
+    # ========== 7. DYNAMIC RECOVERY GATE & SAFETY FLOOR ==========
+    if state.lost_counter > 5 and raw_score > dynamic_th * 0.75:
+        score = max(score, dynamic_th * 0.88)
         
     score = max(score, raw_score * 0.70)
 
@@ -187,17 +200,14 @@ def decision_engine(state, raw_bbox, raw_score, tracker, frame_shape, init_size)
     # STATE SWITCH
     # =========================
     if score >= dynamic_th:
+        # ===== TRACK MODE =====
         state.lost_counter = 0
         state.consecutive_tracks += 1
         
-        vx = soft_clip(raw_x - csv_box[0], -W * 0.05, W * 0.05)
-        vy = soft_clip(raw_y - csv_box[1], -H * 0.05, H * 0.05)
-        
-        # 🚀 ALPHA-BETA FILTER UPDATE
-        ax = vx - state.vx_ema
-        ay = vy - state.vy_ema
-        state.ax_ema = 0.8 * state.ax_ema + 0.2 * ax
-        state.ay_ema = 0.8 * state.ay_ema + 0.2 * ay
+        vx = raw_x - csv_box[0]
+        vy = raw_y - csv_box[1]
+        vx = soft_clip(vx, -W * 0.05, W * 0.05)
+        vy = soft_clip(vy, -H * 0.05, H * 0.05)
         
         state.vx_ema = 0.80 * state.vx_ema + 0.20 * vx  
         state.vy_ema = 0.80 * state.vy_ema + 0.20 * vy
@@ -208,7 +218,12 @@ def decision_engine(state, raw_bbox, raw_score, tracker, frame_shape, init_size)
         tracker.size = np.array([raw_w, raw_h])
         state.stable_w, state.stable_h = raw_w, raw_h
         
-        alpha = max(0.40, 0.70 - 0.005 * current_speed) if score > 0.65 else max(0.40, 0.50 - 0.005 * current_speed)
+        if score > 0.65:
+            alpha = max(0.60, 0.70 - 0.005 * current_speed)
+        elif score > 0.50:
+            alpha = max(0.50, 0.60 - 0.005 * current_speed)
+        else:
+            alpha = max(0.40, 0.50 - 0.005 * current_speed)
             
         csv_box[0] = alpha * raw_x + (1 - alpha) * csv_box[0]
         csv_box[1] = alpha * raw_y + (1 - alpha) * csv_box[1]
@@ -216,39 +231,55 @@ def decision_engine(state, raw_bbox, raw_score, tracker, frame_shape, init_size)
         csv_box[3] = alpha * raw_h + (1 - alpha) * csv_box[3]
         
     else:
+        # ===== RECOVERY MODE =====
         state.lost_counter += 1
         state.consecutive_tracks = 0  
         
-        # 🚀 ALPHA-BETA PREDICTION
-        pred_cx = csv_box[0] + csv_box[2]/2 + state.vx_ema * 1.5 + state.ax_ema * 0.5 
-        pred_cy = csv_box[1] + csv_box[3]/2 + state.vy_ema * 1.5 + state.ay_ema * 0.5
+        pred_cx = csv_box[0] + csv_box[2]/2 + state.vx_ema * 1.5  
+        pred_cy = csv_box[1] + csv_box[3]/2 + state.vy_ema * 1.5
         
         if state.lost_counter < max_lost // 2:
-            csv_box[0] += state.vx_ema + state.ax_ema
-            csv_box[1] += state.vy_ema + state.ay_ema
+            # Phase 1: Inertia
+            csv_box[0] += state.vx_ema
+            csv_box[1] += state.vy_ema
             
             decay = 0.92 if state.lost_counter < 3 else 0.85
-            state.vx_ema *= decay; state.vy_ema *= decay
-            state.ax_ema *= decay; state.ay_ema *= decay
+            state.vx_ema *= decay
+            state.vy_ema *= decay
             
             tracker.center_pos = np.array([pred_cx, pred_cy])
             
         elif state.lost_counter <= max_lost:
+            # Phase 2: Expand Search
             base_expand = 1.4 + 0.08 * state.lost_counter  
-            base_expand *= 1.10 if stable_area < 500 else (1.05 if stable_area < 1500 else 1.0)
+            
+            if stable_area < 500: 
+                base_expand *= 1.10 
+            elif stable_area < 1500: 
+                base_expand *= 1.05 
+                
             expand = min(base_expand, 3.5)  
             
+            new_w = state.stable_w * expand
+            new_h = state.stable_h * expand
+            
             tracker.center_pos = np.array([pred_cx, pred_cy])
-            tracker.size = np.array([state.stable_w * expand, state.stable_h * expand])
+            tracker.size = np.array([new_w, new_h])
             
         else:
-            state.vx_ema *= 0.35; state.vy_ema *= 0.35
+            # Phase 3: Deep Lost (Residual Momentum)
+            state.vx_ema *= 0.35  
+            state.vy_ema *= 0.35
+            
             pred_cx = csv_box[0] + csv_box[2]/2 + state.vx_ema
             pred_cy = csv_box[1] + csv_box[3]/2 + state.vy_ema
             
             expand = min(4.0, 1.8 + 0.06 * state.lost_counter)  
+            new_w = state.stable_w * expand
+            new_h = state.stable_h * expand
+            
             tracker.center_pos = np.array([pred_cx, pred_cy])
-            tracker.size = np.array([state.stable_w * expand, state.stable_h * expand])
+            tracker.size = np.array([new_w, new_h])
             
         csv_box[2] = 0.85 * csv_box[2] + 0.15 * state.stable_w  
         csv_box[3] = 0.85 * csv_box[3] + 0.15 * state.stable_h
@@ -266,74 +297,56 @@ def run_tracker(sequence):
     
     cap = cv2.VideoCapture(video_path)
     ret, frame = cap.read()
-    if not ret: return {"status": "failed", "predictions": []}
+    if not ret:
+        return {"status": "failed", "predictions": []}
         
     H, W = frame.shape[:2]
-    tracker = TCTrackTracker(model)
+    
+    # Initialize HiFT Tracker
+    tracker = HiFTTracker(model)
     x, y, w, h = map(float, init_bbox)
     tracker.init(frame, [x, y, w, h])
-    
-    # 🔥 1. SAVE BASELINE TEMPLATE
-    with torch.no_grad():
-        zf_init = tracker.model.zf.clone()
     
     state = TemporalState([x, y, w, h])
     
     predictions = [{
         "id": f"{seq_name}_0",
-        "x": round(x, 2), "y": round(y, 2),
-        "w": round(w, 2), "h": round(h, 2)
+        "x": round(x, 2),
+        "y": round(y, 2),
+        "w": round(w, 2),
+        "h": round(h, 2)
     }]
     
     frame_idx = 1
     while True:
         ret, frame = cap.read()
-        if not ret: break
+        if not ret:
+            break
             
-        outputs = tracker.track(frame, TUNED_HP)
+        # HiFT model track (No TUNED_HP passed)
+        outputs = tracker.track(frame)
         raw_bbox = outputs['bbox']
-        raw_score = float(outputs.get('best_score', 0))
+        raw_score = float(outputs['best_score'])
         
         final_box = decision_engine(
             state, raw_bbox, raw_score, tracker, frame.shape[:2], (w, h)
         )
         
         state.update_score(raw_score)
-        
-        # 🔥 2. DYNAMIC TEMPLATE UPDATER (The OSTrack Magic)
-        # Update ONLY if we are extremely confident and track is stable
-        if raw_score > 0.95 and state.lost_counter == 0 and state.consecutive_tracks > 15:
-            # Get new crop parameters
-            w_z = state.stable_w + cfg.TRACK.CONTEXT_AMOUNT * np.sum([state.stable_w, state.stable_h])
-            h_z = state.stable_h + cfg.TRACK.CONTEXT_AMOUNT * np.sum([state.stable_w, state.stable_h])
-            s_z = round(np.sqrt(w_z * h_z))
-            
-            with torch.no_grad():
-                # Extract new feature from current frame
-                new_z_crop = tracker.get_subwindow(frame, tracker.center_pos, cfg.TRACK.EXEMPLAR_SIZE, s_z, tracker.channel_average)
-                
-                # 🛠️ THE FIX: Add the Sequence Length (L) dimension for the Temporal Backbone
-                new_z_crop = new_z_crop.unsqueeze(1) 
-                
-                new_zf = tracker.model.backbone(new_z_crop)
-                
-                # Soft Fusion: 85% Frame Zero (Safety) + 15% Current Frame (Adaptation)
-                tracker.model.zf = 0.85 * zf_init + 0.15 * new_zf
-                
-        # 🔥 3. MEMORY REVERT
-        # If we start losing the target, immediately forget recent updates to avoid poisoning
-        elif state.lost_counter > 5:
-            with torch.no_grad():
-                tracker.model.zf = zf_init.clone()
-        
         final_box = clip_box(final_box, W, H)
+        
         predictions.append({
             "id": f"{seq_name}_{frame_idx}",
-            "x": round(final_box[0], 2), "y": round(final_box[1], 2),
-            "w": round(final_box[2], 2), "h": round(final_box[3], 2)
+            "x": round(final_box[0], 2),
+            "y": round(final_box[1], 2),
+            "w": round(final_box[2], 2),
+            "h": round(final_box[3], 2)
         })
         
         frame_idx += 1
         
     cap.release()
-    return {"status": "done", "predictions": predictions}
+    return {
+        "status": "done",
+        "predictions": predictions
+    }
