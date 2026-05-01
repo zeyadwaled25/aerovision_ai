@@ -2,11 +2,8 @@
 📌 Evaluation Module
 
 Purpose:
-Evaluate tracking predictions against Ground Truth.
-
-Overview:
-- Compute IoU and center distance per frame
-- Aggregate metrics (IoU, AUC, precision, robustness)
+Evaluate tracking predictions against Ground Truth annotations.
+Computes standard Object Tracking metrics (IoU, Distance, AUC, Precision, Robustness).
 """
 
 import numpy as np
@@ -14,43 +11,42 @@ from src.utils.metrics import (
     compute_iou,
     center_distance,
     success_curve,
-    precision_curve,
     compute_auc,
 )
 
-
 def compute_precision_at_threshold(distances, threshold=20):
-    # نسبة الفريمات اللي distance فيها أقل من threshold
+    """Returns the ratio of frames where center distance is <= threshold."""
     distances = np.array(distances)
     return np.mean(distances <= threshold)
 
-
 def compute_robustness_threshold(ious, threshold=0.2):
     """
-        Failure = IoU أقل من threshold
-        Robustness = نسبة الفشل
+    Computes robustness as the failure rate.
+    Failure is defined as an IoU drop below the threshold.
     """
     ious = np.array(ious)
     failures = ious < threshold
     return np.mean(failures)
 
-
 def evaluate(sequence, predictions):
-    boxes = sequence["boxes"]
+    """
+    Evaluates a single sequence's predictions against its Ground Truth.
+    """
+    boxes = sequence.get("boxes")
+    if not boxes:
+        return {}
 
     ious = []
     distances = []
 
-    # Loop over frames
     for i, pred in enumerate(predictions):
-
-        if boxes is None or i >= len(boxes):
-            continue
+        if i >= len(boxes):
+            break
 
         gt = boxes[i]
 
-        # Skip invalid GT
-        if gt[2] == 0 or gt[3] == 0:
+        # Skip frames where Ground Truth is invalid/absent
+        if gt[2] <= 0 or gt[3] <= 0:
             continue
 
         pred_box = [pred["x"], pred["y"], pred["w"], pred["h"]]
@@ -61,21 +57,17 @@ def evaluate(sequence, predictions):
         ious.append(iou)
         distances.append(dist)
 
-    if len(ious) == 0:
+    if not ious:
         return {}
 
-    # Aggregated Metrics
     avg_iou = np.mean(ious)
     avg_dist = np.mean(distances)
 
-    # Success Curve → AUC
+    # Compute AUC from Success Curve
     _, success = success_curve(ious)
     auc = compute_auc(success)
 
-    # Precision
     precision_20 = compute_precision_at_threshold(distances, threshold=20)
-
-    # Robustness (IoU threshold-based)
     robustness = compute_robustness_threshold(ious, threshold=0.2)
 
     return {

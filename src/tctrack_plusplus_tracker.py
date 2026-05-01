@@ -1,23 +1,29 @@
 """
-📌 TCTrack++ — The ULTRA Edition (Pushing the Limits)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🏆 Ultimate Upgrades:
-  [1] Dynamic Template Fusion (Memory Updating without Retraining)
-  [2] Alpha-Beta Kinematic Filter (Advanced Occlusion Prediction)
-  [3] Auto-Memory Revert (Protects against target poisoning)
+📌 TCTrack++ V5 Inference Engine (The Physicist Edition)
+
+Purpose:
+Execute real-time tracking using a physics-aware, multi-hypothesis approach.
+
+Overview:
+- Alpha-Beta Kinematic Filter: Predicts velocity & acceleration during occlusions.
+- Dynamic Hyperparameters: Adapts penalty_k & window_influence based on motion.
+- Isolated Hypotheses: Wide and Shifted grid search without PySOT state poisoning.
+- Decision Engine: Strict anti-teleportation and pure-logic state management.
 """
 
-import cv2
-import torch
+import os
 import sys
 import math
-import numpy as np
 import random
+import numpy as np
+import cv2
+import torch
 
 # ==========================================
-# 🛡️ REPRODUCIBILITY LOCK (KAGGLE STANDARD)
+# 🛡️ 1. REPRODUCIBILITY LOCK
 # ==========================================
 def set_deterministic_seed(seed=42):
+    """Locks all random seeds to ensure reproducible evaluation runs."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -28,63 +34,101 @@ def set_deterministic_seed(seed=42):
 
 set_deterministic_seed(42)
 
-# =========================
-# PATH CONFIG
-# =========================
-if "./tctrack" not in sys.path:
-    sys.path.insert(0, "./tctrack")
+# ==========================================
+# ⚙️ 2. PYSOT CONFIGURATION & MODEL LOADING
+# ==========================================
+# Inject PySOT path to allow internal module imports
+PYSOT_PATH = "./tctrack"
+if PYSOT_PATH not in sys.path:
+    sys.path.insert(0, PYSOT_PATH)
 
 from pysot.core.config import cfg
-from pysot.models.utile_tctrackplus.model_builder import ModelBuilder_tctrackplus 
+from pysot.models.utile_tctrackplus.model_builder import ModelBuilder_tctrackplus
 from pysot.tracker.tctrack_tracker import TCTrackTracker
 from pysot.utils.model_load import load_pretrain
 
-CONFIG_PATH = "./tctrack/experiments/TCTrack++/config.yaml"
-WEIGHTS_PATH = "./models/tctrack++.pth" 
+CONFIG_PATH = os.path.join(PYSOT_PATH, "experiments/TCTrack++/config.yaml")
+WEIGHTS_PATH = "./models/tctrack++.pth"
 
 cfg.merge_from_file(CONFIG_PATH)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-print("⏳ Loading TCTrack++ (ULTRA Edition with Dynamic Memory)...")
+print(f"🪄 Loading TCTrack++ V5 Engine on {device.upper()}...")
 
-model = ModelBuilder_tctrackplus('test')
-model = load_pretrain(model, WEIGHTS_PATH).to(device).eval()
+# Initialize Global Tracker Model to prevent reloading per sequence
+GLOBAL_MODEL = ModelBuilder_tctrackplus("test")
+GLOBAL_MODEL = load_pretrain(GLOBAL_MODEL, WEIGHTS_PATH).to(device).eval()
 
-TUNED_HP = [0.05, 0.55, 0.15]
+# Base Hyperparameters: [penalty_k, window_influence, lr]
+BASE_HP = [0.05, 0.55, 0.15]
 
+# ==========================================
+# 🛠️ 3. UTILITIES & DYNAMIC ENGINE
+# ==========================================
 def clip_box(box, W, H):
+    """Clips bounding box to image boundaries and ensures minimum size."""
     return [
         max(0, min(box[0], W - 1)),
         max(0, min(box[1], H - 1)),
         max(2.0, min(box[2], W - box[0])),
-        max(2.0, min(box[3], H - box[1]))
+        max(2.0, min(box[3], H - box[1])),
     ]
 
 def soft_clip(val, lo, hi):
+    """Clips a value within a specific range gracefully."""
     return max(lo, min(val, hi))
 
-def soft_penalty(excess_ratio: float, lo: float = 0.6) -> float:
-    return lo + (1.0 - lo) * math.exp(-excess_ratio)
+def is_valid_jump(box1, box2):
+    """Anti-teleportation filter: Rejects impossible spatial jumps."""
+    cx1 = box1[0] + box1[2] / 2
+    cy1 = box1[1] + box1[3] / 2
+    cx2 = box2[0] + box2[2] / 2
+    cy2 = box2[1] + box2[3] / 2
 
-# =========================
-# 🧠 TEMPORAL STATE (Alpha-Beta Filter added)
-# =========================
+    dist = math.hypot(cx1 - cx2, cy1 - cy2)
+    # Jump must not exceed 3x the maximum dimension of the object
+    return dist < max(box1[2], box1[3]) * 3
+
+def get_dynamic_hp(state, base_hp):
+    """Adapts hyperparameters dynamically based on target motion and scale."""
+    penalty_k, window_influence, lr = base_hp
+    motion = math.hypot(state.vx, state.vy)
+    area = state.stable_w * state.stable_h
+
+    # Fast Motion: Relax window constraint
+    if motion > 10.0:
+        window_influence *= 0.85
+        
+    # Tiny Target: Forgive size penalties and relax window
+    if area < 1000:
+        penalty_k *= 0.8
+        window_influence *= 0.9
+
+    # Lost Recovery: Rapidly decay window influence to allow wide free-search
+    if state.lost_counter > 0:
+        window_influence = max(0.15, window_influence * (0.75 ** state.lost_counter))
+
+    return [penalty_k, window_influence, lr]
+
+# ==========================================
+# 🧠 4. KINEMATIC STATE TRACKER
+# ==========================================
 class TemporalState:
+    """Maintains physical state (Velocity/Acceleration) via Alpha-Beta Filtering."""
     def __init__(self, init_bbox):
         self.csv_box = list(init_bbox)
         self.score_history = [0.5] * 5
+
         self.lost_counter = 0
-        self.consecutive_tracks = 0  
         
-        self.vx_ema = 0.0
-        self.vy_ema = 0.0
-        self.ax_ema = 0.0 # Acceleration X
-        self.ay_ema = 0.0 # Acceleration Y
-        
+        # Alpha-Beta Kinematics
+        self.vx = 0.0
+        self.vy = 0.0
+        self.ax = 0.0
+        self.ay = 0.0
+
         self.stable_w = init_bbox[2]
         self.stable_h = init_bbox[3]
-        
-        self.recent_max_speed = 0.0
 
     def update_score(self, raw_score):
         self.score_history.append(min(1.0, raw_score))
@@ -92,248 +136,231 @@ class TemporalState:
             self.score_history.pop(0)
 
     def dynamic_threshold(self):
-        mean_score = sum(self.score_history) / max(1, len(self.score_history))
-        motion_factor = min(2.0, 1.0 + self.recent_max_speed / 15.0)
-        th_floor = 0.15 if self.recent_max_speed > 10 else 0.18
-        th = max(th_floor, mean_score * (0.50 / motion_factor))
-        
-        base_max_lost = 12 if mean_score > 0.50 else 25
-        if self.consecutive_tracks > 10:
-            base_max_lost += 5
-            
-        max_lost = base_max_lost
-        area = self.csv_box[2] * self.csv_box[3]
-        
-        if area < 1200:
-            th *= 0.88  
-            max_lost += 3  
+        """Computes activation thresholds based on historical confidence and speed."""
+        mean_score = sum(self.score_history) / len(self.score_history)
+        motion = math.hypot(self.vx, self.vy)
+
+        th = max(0.15, mean_score * (0.52 / (1.0 + motion / 10.0)))
+        max_lost = 12 if mean_score > 0.5 else 25
+
+        if self.stable_w * self.stable_h < 1200:
+            th *= 0.9
+            max_lost += 3
 
         return th, max_lost
 
-# =========================
-# ⚙️ DECISION ENGINE
-# =========================
-def decision_engine(state, raw_bbox, raw_score, tracker, frame_shape, init_size):
+# ==========================================
+# ⚖️ 5. PURE LOGIC DECISION ENGINE
+# ==========================================
+def decision_engine(state, raw_bbox, raw_score, frame_shape):
+    """Evaluates the best hypothesis purely logically without mutating PySOT internals."""
     raw_x, raw_y, raw_w, raw_h = raw_bbox
     H, W = frame_shape
+
+    # Handle invalid output
+    if raw_w <= 2 or raw_h <= 2 or any(math.isnan(v) for v in raw_bbox):
+        return state.csv_box
+
     csv_box = state.csv_box
     score = raw_score
-    dynamic_th, max_lost = state.dynamic_threshold()
 
-    if raw_w <= 2 or raw_h <= 2 or any(math.isnan(v) for v in raw_bbox):
-        return csv_box
+    dynamic_th, max_lost = state.dynamic_threshold()
 
     raw_cx = raw_x + raw_w / 2
     raw_cy = raw_y + raw_h / 2
     prev_cx = csv_box[0] + csv_box[2] / 2
     prev_cy = csv_box[1] + csv_box[3] / 2
-    box_diag = math.hypot(csv_box[2], csv_box[3])
-    current_speed = math.hypot(state.vx_ema, state.vy_ema)
-
-    area = raw_w * raw_h
-    if area < 1000 and raw_score > dynamic_th * 0.8: 
-        boost_factor = 1.0 + 0.1 * ((raw_score - dynamic_th * 0.8) / (1.0 - dynamic_th * 0.8))
-        score *= min(boost_factor, 1.08) 
-    elif area < 400 and raw_score > 0.45:
-        score *= 1.03
-
-    if state.lost_counter == 0 and box_diag > 0:
-        pred_vx = raw_cx - prev_cx
-        pred_vy = raw_cy - prev_cy
-        velocity_diff = math.hypot(pred_vx - state.vx_ema, pred_vy - state.vy_ema)
-        speed_tolerance = box_diag * (1.5 + min(2.0, current_speed / 10.0))
-        
-        if velocity_diff > speed_tolerance:
-            excess = (velocity_diff - speed_tolerance) / speed_tolerance
-            score *= soft_penalty(excess, lo=0.75) 
-        
-        instant_speed = math.hypot(pred_vx, pred_vy)
-        state.recent_max_speed = 0.9 * state.recent_max_speed + 0.1 * instant_speed
-
-    dist = math.hypot(raw_cx - prev_cx, raw_cy - prev_cy)
-    base_dist_th = max(40.0, 2.0 * max(csv_box[2], csv_box[3]))
-    dist_th = base_dist_th + current_speed * 2.0 
     
-    if state.lost_counter > 5:
-        dist_th *= 1.3 
-        
-    if dist > dist_th:
-        dist_excess = (dist - dist_th) / max(dist_th, 1.0)
-        score *= soft_penalty(dist_excess, lo=0.75)
+    dist = math.hypot(raw_cx - prev_cx, raw_cy - prev_cy)
+    motion = math.hypot(state.vx, state.vy)
 
+    # Soft Distance Penalty
+    dist_th = max(40.0, 2.2 * max(csv_box[2], csv_box[3])) + motion * 2
+    if dist > dist_th:
+        excess = (dist - dist_th) / dist_th
+        score *= max(0.80, 1.0 - 0.15 * excess)
+
+    # Size Control Penalty
     stable_area = max(1.0, state.stable_w * state.stable_h)
     size_ratio = (raw_w * raw_h) / stable_area
-    if size_ratio > 2.5:
-        score *= soft_penalty((size_ratio - 2.5) / 2.5, lo=0.82) 
-    elif size_ratio < 0.4:
-        score *= soft_penalty((0.4 - size_ratio) / 0.4, lo=0.75) 
+    if size_ratio > 2.5 or size_ratio < 0.4:
+        score *= 0.85
 
-    if state.lost_counter < 3:
-        pot_vx = raw_cx - prev_cx
-        pot_vy = raw_cy - prev_cy
-        if 5.0 < current_speed <= 15.0 and dist > 5.0:
-            direction_change = abs(math.atan2(state.vy_ema, state.vx_ema) - math.atan2(pot_vy + 1e-9, pot_vx + 1e-9))
-            direction_change = min(direction_change, 2 * math.pi - direction_change)
-            if direction_change > 2.5:
-                score *= soft_penalty((direction_change - 2.5) / 2.5, lo=0.82)
+    score = max(score, raw_score * 0.75) # Score Floor
 
-    if state.lost_counter > 8: score *= 1.08  
-    if state.lost_counter > 3: score *= (1.0 + min(0.08, (state.lost_counter - 3) * 0.01))
-    if state.lost_counter > 5 and raw_score > dynamic_th * 0.75: score = max(score, dynamic_th * 0.88)
-        
-    score = max(score, raw_score * 0.70)
+    # Recovery Boost
+    if state.lost_counter > 3:
+        score *= 1.05
+    if state.lost_counter > 5 and raw_score > dynamic_th * 0.7:
+        score = max(score, dynamic_th * 0.85)
 
-    # =========================
-    # STATE SWITCH
-    # =========================
+    # --- STATE TRANSITION ---
     if score >= dynamic_th:
+        # 🟢 TRACK MODE
         state.lost_counter = 0
-        state.consecutive_tracks += 1
+
+        raw_vx = soft_clip(raw_x - csv_box[0], -W * 0.05, W * 0.05)
+        raw_vy = soft_clip(raw_y - csv_box[1], -H * 0.05, H * 0.05)
+
+        # Alpha-Beta Filter Update
+        alpha_kf = 0.40  
+        beta_kf = 0.15   
         
-        vx = soft_clip(raw_x - csv_box[0], -W * 0.05, W * 0.05)
-        vy = soft_clip(raw_y - csv_box[1], -H * 0.05, H * 0.05)
-        
-        # 🚀 ALPHA-BETA FILTER UPDATE
-        ax = vx - state.vx_ema
-        ay = vy - state.vy_ema
-        state.ax_ema = 0.8 * state.ax_ema + 0.2 * ax
-        state.ay_ema = 0.8 * state.ay_ema + 0.2 * ay
-        
-        state.vx_ema = 0.80 * state.vx_ema + 0.20 * vx  
-        state.vy_ema = 0.80 * state.vy_ema + 0.20 * vy
-        
-        raw_w = max(4.0, min(raw_w, init_size[0] * 10))
-        raw_h = max(4.0, min(raw_h, init_size[1] * 10))
-        
-        tracker.size = np.array([raw_w, raw_h])
+        err_vx = raw_vx - state.vx
+        err_vy = raw_vy - state.vy
+
+        state.vx += alpha_kf * err_vx
+        state.vy += alpha_kf * err_vy
+        state.ax = soft_clip(state.ax + beta_kf * err_vx, -5.0, 5.0)
+        state.ay = soft_clip(state.ay + beta_kf * err_vy, -5.0, 5.0)
+
         state.stable_w, state.stable_h = raw_w, raw_h
-        
-        alpha = max(0.40, 0.70 - 0.005 * current_speed) if score > 0.65 else max(0.40, 0.50 - 0.005 * current_speed)
-            
+        alpha = 0.7 if score > 0.6 else 0.55
+
         csv_box[0] = alpha * raw_x + (1 - alpha) * csv_box[0]
         csv_box[1] = alpha * raw_y + (1 - alpha) * csv_box[1]
         csv_box[2] = alpha * raw_w + (1 - alpha) * csv_box[2]
         csv_box[3] = alpha * raw_h + (1 - alpha) * csv_box[3]
-        
+
     else:
+        # 🔴 RECOVERY MODE
         state.lost_counter += 1
-        state.consecutive_tracks = 0  
-        
-        # 🚀 ALPHA-BETA PREDICTION
-        pred_cx = csv_box[0] + csv_box[2]/2 + state.vx_ema * 1.5 + state.ax_ema * 0.5 
-        pred_cy = csv_box[1] + csv_box[3]/2 + state.vy_ema * 1.5 + state.ay_ema * 0.5
-        
+
+        if state.lost_counter > 3:
+            state.vx *= 0.6
+            state.vy *= 0.6
+            state.ax *= 0.3
+            state.ay *= 0.3
+
+        # Predict using Velocity + Acceleration
+        pred_cx = csv_box[0] + csv_box[2] / 2 + state.vx * 1.5 + state.ax * 0.5
+        pred_cy = csv_box[1] + csv_box[3] / 2 + state.vy * 1.5 + state.ay * 0.5
+
         if state.lost_counter < max_lost // 2:
-            csv_box[0] += state.vx_ema + state.ax_ema
-            csv_box[1] += state.vy_ema + state.ay_ema
-            
-            decay = 0.92 if state.lost_counter < 3 else 0.85
-            state.vx_ema *= decay; state.vy_ema *= decay
-            state.ax_ema *= decay; state.ay_ema *= decay
-            
-            tracker.center_pos = np.array([pred_cx, pred_cy])
-            
-        elif state.lost_counter <= max_lost:
-            base_expand = 1.4 + 0.08 * state.lost_counter  
-            base_expand *= 1.10 if stable_area < 500 else (1.05 if stable_area < 1500 else 1.0)
-            expand = min(base_expand, 3.5)  
-            
-            tracker.center_pos = np.array([pred_cx, pred_cy])
-            tracker.size = np.array([state.stable_w * expand, state.stable_h * expand])
-            
-        else:
-            state.vx_ema *= 0.35; state.vy_ema *= 0.35
-            pred_cx = csv_box[0] + csv_box[2]/2 + state.vx_ema
-            pred_cy = csv_box[1] + csv_box[3]/2 + state.vy_ema
-            
-            expand = min(4.0, 1.8 + 0.06 * state.lost_counter)  
-            tracker.center_pos = np.array([pred_cx, pred_cy])
-            tracker.size = np.array([state.stable_w * expand, state.stable_h * expand])
-            
-        csv_box[2] = 0.85 * csv_box[2] + 0.15 * state.stable_w  
+            csv_box[0] += state.vx + state.ax * 0.5
+            csv_box[1] += state.vy + state.ay * 0.5
+
+        csv_box[2] = 0.85 * csv_box[2] + 0.15 * state.stable_w
         csv_box[3] = 0.85 * csv_box[3] + 0.15 * state.stable_h
-        
+
     state.csv_box = csv_box
     return csv_box
 
-# =========================
-# 🚀 MAIN RUN
-# =========================
+# ==========================================
+# 🚀 6. MAIN INFERENCE LOOP
+# ==========================================
 def run_tracker(sequence):
-    video_path = sequence["video_path"]
-    init_bbox = sequence["init_bbox"]
-    seq_name = sequence["seq_name"]
-    
-    cap = cv2.VideoCapture(video_path)
+    """Executes the multi-hypothesis tracking pipeline on a given sequence."""
+    cap = cv2.VideoCapture(sequence["video_path"])
     ret, frame = cap.read()
-    if not ret: return {"status": "failed", "predictions": []}
-        
+    if not ret:
+        return {"status": "failed", "predictions": []}
+
     H, W = frame.shape[:2]
-    tracker = TCTrackTracker(model)
-    x, y, w, h = map(float, init_bbox)
+    tracker = TCTrackTracker(GLOBAL_MODEL)
+
+    x, y, w, h = map(float, sequence["init_bbox"])
     tracker.init(frame, [x, y, w, h])
-    
-    # 🔥 1. SAVE BASELINE TEMPLATE
-    with torch.no_grad():
-        zf_init = tracker.model.zf.clone()
-    
+
     state = TemporalState([x, y, w, h])
-    
-    predictions = [{
-        "id": f"{seq_name}_0",
-        "x": round(x, 2), "y": round(y, 2),
-        "w": round(w, 2), "h": round(h, 2)
-    }]
-    
-    frame_idx = 1
+    predictions = [{"id": f"{sequence['seq_name']}_0", "x": x, "y": y, "w": w, "h": h}]
+    idx = 1
+
     while True:
         ret, frame = cap.read()
-        if not ret: break
+        if not ret:
+            break
+
+        dynamic_th, max_lost = state.dynamic_threshold()
+        current_hp = get_dynamic_hp(state, BASE_HP)
+
+        # 🛡️ ISOLATE STATE
+        center_backup = tracker.center_pos.copy()
+        size_backup = tracker.size.copy()
+
+        # --- HYPOTHESIS 1: MAIN ---
+        tracker.center_pos = center_backup.copy()
+        tracker.size = size_backup.copy()
+        outputs_main = tracker.track(frame, current_hp)
+        score_main = float(outputs_main.get("best_score", 0))
+
+        best_outputs = outputs_main
+        best_score = score_main
+        base_score = score_main  
+
+        # 🚨 Conditional Activation: Only run heavy hypotheses during occlusion
+        if state.lost_counter > 2 or score_main < dynamic_th:
+
+            # --- HYPOTHESIS 2: WIDE SEARCH ---
+            tracker.center_pos = center_backup.copy()
+            tracker.size = size_backup.copy() * 1.4
+            outputs_wide = tracker.track(frame, current_hp)
+            score_wide = float(outputs_wide.get("best_score", 0))
+
+            # --- HYPOTHESIS 3: ACCELERATION SHIFTED GRID ---
+            tracker.center_pos = center_backup.copy() + np.array(
+                [state.vx * 1.5 + state.ax, state.vy * 1.5 + state.ay]
+            )
+            tracker.size = size_backup.copy()
+            outputs_shift = tracker.track(frame, current_hp)
+            score_shift = float(outputs_shift.get("best_score", 0))
+
+            # 🛡️ RESTORE PURE STATE
+            tracker.center_pos = center_backup.copy()
+            tracker.size = size_backup.copy()
+
+            # --- HYPOTHESIS SELECTION ---
+            margin = 0.05 if score_main > 0.5 else 0.03
             
-        outputs = tracker.track(frame, TUNED_HP)
-        raw_bbox = outputs['bbox']
-        raw_score = float(outputs.get('best_score', 0))
-        
-        final_box = decision_engine(
-            state, raw_bbox, raw_score, tracker, frame.shape[:2], (w, h)
-        )
-        
-        state.update_score(raw_score)
-        
-        # 🔥 2. DYNAMIC TEMPLATE UPDATER (The OSTrack Magic)
-        # Update ONLY if we are extremely confident and track is stable
-        if raw_score > 0.95 and state.lost_counter == 0 and state.consecutive_tracks > 15:
-            # Get new crop parameters
-            w_z = state.stable_w + cfg.TRACK.CONTEXT_AMOUNT * np.sum([state.stable_w, state.stable_h])
-            h_z = state.stable_h + cfg.TRACK.CONTEXT_AMOUNT * np.sum([state.stable_w, state.stable_h])
-            s_z = round(np.sqrt(w_z * h_z))
-            
-            with torch.no_grad():
-                # Extract new feature from current frame
-                new_z_crop = tracker.get_subwindow(frame, tracker.center_pos, cfg.TRACK.EXEMPLAR_SIZE, s_z, tracker.channel_average)
-                
-                # 🛠️ THE FIX: Add the Sequence Length (L) dimension for the Temporal Backbone
-                new_z_crop = new_z_crop.unsqueeze(1) 
-                
-                new_zf = tracker.model.backbone(new_z_crop)
-                
-                # Soft Fusion: 85% Frame Zero (Safety) + 15% Current Frame (Adaptation)
-                tracker.model.zf = 0.85 * zf_init + 0.15 * new_zf
-                
-        # 🔥 3. MEMORY REVERT
-        # If we start losing the target, immediately forget recent updates to avoid poisoning
-        elif state.lost_counter > 5:
-            with torch.no_grad():
-                tracker.model.zf = zf_init.clone()
-        
+            if score_shift > base_score + margin and is_valid_jump(outputs_main["bbox"], outputs_shift["bbox"]):
+                best_outputs = outputs_shift
+                best_score = score_shift
+
+            if score_wide > base_score + margin and is_valid_jump(outputs_main["bbox"], outputs_wide["bbox"]):
+                if score_wide > best_score:
+                    best_outputs = outputs_wide
+                    best_score = score_wide
+
+            # Killer Safety Check: Prevent Sudden Distractor Jumps
+            if best_score > score_main + 0.25:
+                best_outputs = outputs_main
+                best_score = score_main
+
+            best_score = max(best_score, score_main * 0.85)
+
+        else:
+            # Safe Restore if alternative hypotheses weren't run
+            tracker.center_pos = center_backup.copy()
+            tracker.size = size_backup.copy()
+
+        # Deep Lost Penalty
+        if score_main < 0.3:
+            best_score *= 0.9
+
+        # Evaluate via Decision Engine
+        final_box = decision_engine(state, best_outputs["bbox"], best_score, frame.shape[:2])
+        state.update_score(best_score)
         final_box = clip_box(final_box, W, H)
+
+        # 🔄 MASTER SYNC
+        _, max_lost = state.dynamic_threshold()
+        if state.lost_counter > max_lost // 2:
+            expand = min(1.5 + 0.1 * state.lost_counter, 3.5)
+            tracker.size = np.array([state.stable_w * expand, state.stable_h * expand])
+        else:
+            tracker.size = np.array([final_box[2], final_box[3]])
+
+        tracker.center_pos = np.array([final_box[0] + final_box[2] / 2, final_box[1] + final_box[3] / 2])
+
         predictions.append({
-            "id": f"{seq_name}_{frame_idx}",
-            "x": round(final_box[0], 2), "y": round(final_box[1], 2),
-            "w": round(final_box[2], 2), "h": round(final_box[3], 2)
+            "id": f"{sequence['seq_name']}_{idx}",
+            "x": round(final_box[0], 2),
+            "y": round(final_box[1], 2),
+            "w": round(final_box[2], 2),
+            "h": round(final_box[3], 2),
         })
-        
-        frame_idx += 1
-        
+
+        idx += 1
+
     cap.release()
     return {"status": "done", "predictions": predictions}
