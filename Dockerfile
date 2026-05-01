@@ -27,3 +27,4 @@ COPY . .
 # 🎯 Set the Entrypoint
 # This allows organizers to run: docker run <image_name> --dataset_dir /data --split hidden_test
 ENTRYPOINT ["python", "main.py"]
+CMD ["--dataset_dir", "/data", "--split", "hidden_test"]

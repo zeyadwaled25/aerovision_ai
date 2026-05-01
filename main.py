@@ -41,7 +41,7 @@ from src.tctrack_plusplus_tracker import run_tracker
 from src.evaluate import evaluate
 
 def main(
-    dataset_dir: str = "data",
+    dataset_dir: str = "/data",
     split: str = "public_lb",
     output_csv: str = "./outputs/predictions.csv",
 ):
@@ -103,10 +103,13 @@ def main(
                 break
 
         # 🔹 Save predictions
-        os.makedirs(os.path.dirname(output_csv) or ".", exist_ok=True)
+        # Convert to absolute path to guarantee folder creation (crucial for Colab/Google Drive)
+        abs_output_csv = os.path.abspath(output_csv)
+        os.makedirs(os.path.dirname(abs_output_csv), exist_ok=True)
+        
         df = pd.DataFrame(all_predictions)
-        df.to_csv(output_csv, index=False)
-        print(f"\n✅ Predictions successfully saved to {output_csv}")
+        df.to_csv(abs_output_csv, index=False)
+        print(f"\n✅ Predictions successfully saved to {abs_output_csv}")
 
         # 🔹 Final aggregated metrics
         if all_ious:

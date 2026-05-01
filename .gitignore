@@ -1,37 +1,69 @@
+# -----------------------------
 # Python
+# -----------------------------
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.log
+*.py[cod]
+*.so
 
-# Virtual Environment
+# Virtual environments
 venv/
-.env/
-pysot/
-tctrack/
+.venv/
+env/
+.env
 
-# Dataset
-data/
+# Packaging / tooling
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Outputs
+# -----------------------------
+# Data and outputs
+# -----------------------------
 outputs/
 predictions/
-*.csv
 
-# Jupyter
-.ipynb_checkpoints/
+# Optional: local datasets are typically not versioned
+data/
+# Keep metadata folder if needed by the repository
+!data/metadata/
+!data/metadata/**
 
-# OS files
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-
-# Models
+# -----------------------------
+# Model weights (large artifacts)
+# -----------------------------
 *.pth
 *.pth.tar
 *.pt
 *.ckpt
+*.onnx
+*.engine
+
+# -----------------------------
+# Notebooks
+# -----------------------------
+.ipynb_checkpoints/
+
+# -----------------------------
+# Docker / local env files
+# -----------------------------
+.dockerignore.local
+docker-compose.override.yml
+
+# -----------------------------
+# OS files
+# -----------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# -----------------------------
+# Editors
+# -----------------------------
+.vscode/
+.idea/
